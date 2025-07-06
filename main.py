@@ -23,6 +23,10 @@ async def ingest(request: Request):
 
     # Respond quickly so RuneLite doesn’t block
     return {"ok": True}
+    
+@app.get("/")
+async def root():
+    return {"status": "ok", "msg": "RuneLite loot-ingest service"}
 
 # For local dev:  uvicorn ingest_webhook.main:app --reload --port 8000
 if __name__ == "__main__":
