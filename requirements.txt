@@ -1,5 +1,4 @@
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
-# plus any db / redis libs you need:
 asyncpg==0.29.0
-
+python-dotenv==1.0.1      # only for local dev
