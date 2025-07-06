@@ -1,34 +1,46 @@
 from fastapi import FastAPI, Request, HTTPException
-import os, hmac, hashlib, json, asyncio
-import uvicorn
+import os, hmac, hashlib, json, asyncpg, asyncio
+from typing import Any, Dict
+from db import get_pool, init_db
+from scoring import score
 
 app = FastAPI()
-SHARED_SECRET = os.getenv("SHARED_WEBHOOK_SECRET", "dev")
+SECRET = os.getenv("SHARED_WEBHOOK_SECRET", "dev")
 
-def verify_sig(body: bytes, signature: str):
-    mac = hmac.new(SHARED_SECRET.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(mac, signature)
+def verify_sig(body: bytes, sig: str) -> bool:
+    mac = hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(mac, sig)
+
+@app.on_event("startup")
+async def startup():
+    await init_db()
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "msg": "RuneLite loot-ingest service"}
 
 @app.post("/loot")
 async def ingest(request: Request):
     body = await request.body()
     sig  = request.headers.get("X-Signature", "")
-
     if not verify_sig(body, sig):
         raise HTTPException(status_code=401, detail="Bad signature")
 
-    data = json.loads(body)
-    # TODO: push to Redis / write Postgres / publish in-memory queue
-    print("[LOOT]", data)
+    data: Dict[str, Any] = json.loads(body)
+    player   = data["player"]
+    npc_id   = data["data"]["npcId"]
+    plugin_ts= data["time"]
 
-    # Respond quickly so RuneLite doesn’t block
+    pool = await get_pool()
+    async with pool.acquire() as con:
+        for item in data["data"]["items"]:
+            item_id = item["id"]
+            qty     = item["qty"]
+            pts     = score(item_id, qty)
+            await con.execute(
+                """INSERT INTO loot_events
+                   (player,npc_id,item_id,qty,points,plugin_ts)
+                   VALUES ($1,$2,$3,$4,$5,to_timestamp($6))""",
+                player, npc_id, item_id, qty, pts, plugin_ts/1000
+            )
     return {"ok": True}
-    
-@app.get("/")
-async def root():
-    return {"status": "ok", "msg": "RuneLite loot-ingest service"}
-
-# For local dev:  uvicorn ingest_webhook.main:app --reload --port 8000
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
-
